@@ -361,13 +361,26 @@ function parseDate(rawDates) {
 		return { start: null, end: null };
 	}
 
-	const yearText      = yearMatch[0];
+	const startYear = parseInt(yearMatch[0], 10);
 	const startDateText = dateRangeMatch[1];
-	const endDateText   = dateRangeMatch[2];
+	const endDateText = dateRangeMatch[2];
 
-	const startDate = new Date(`${startDateText}, ${yearText}`);
-	const endDate   = new Date(`${endDateText}, ${yearText}`);
-	return { start: startDate, end: endDate };
+	let startDate = new Date(`${startDateText}, ${startYear}`);
+
+	// Infer the year for the end date
+	let endDateYear = startYear;
+	const startMonth = startDate.getMonth();
+	const endDate = new Date(`${endDateText}, ${startYear}`);
+	const endMonth = endDate.getMonth();
+
+	// Edge case for Fall/Winter term
+	if (endMonth < startMonth) {
+		endDateYear = startYear + 1;
+	}
+
+	const finalEndDate = new Date(`${endDateText}, ${endDateYear}`);
+
+	return { start: startDate, end: finalEndDate };
 }
 
 function parseDayTime(dayTimeNodes) {
