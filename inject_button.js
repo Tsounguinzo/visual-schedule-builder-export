@@ -25,15 +25,27 @@ const popupWindow = document.createElement('div');
 const exportBtn = document.createElement('button');
 stylePopupElement(popupWindow); // helper to add your styles
 
-function togglePopup() {
+async function togglePopup() {
 	if (!isPopupOpen) {
-		showPopup();
+		let holidaySchedules = {};
+		try {
+			const currentTermId = getCurrentTermId();
+			if (!currentTermId) {
+				throw new Error('No term ID found.');
+			}
+			const termBundleData = await fetchTermBundle(currentTermId);
+			holidaySchedules = termBundleData.holidayschedules || {};
+		} catch (error) {
+			console.error('Error fetching term bundle:', error);
+			// Continue without holiday data if fetch fails.
+		}
+		showPopup(holidaySchedules);
 	} else {
 		hidePopup();
 	}
 }
 
-function showPopup() {
+function showPopup(holidaySchedules) {
 	isPopupOpen = true;
 	positionPopupBelowButton(exportBtn, popupWindow); // Position popup relative to the button
 	popupWindow.style.display = 'block';
@@ -67,7 +79,7 @@ function showPopup() {
 			// Convert each to a GCal event object
 			const calendarEvents = [];
 			for (const e of events) {
-				const gcEvent = createEvent(e);
+				const gcEvent = createEvent(e, holidaySchedules);
 				if (gcEvent) calendarEvents.push(gcEvent);
 			}
 			exportToGoogleCalendar(calendarEvents);
@@ -231,7 +243,7 @@ function removeDuplicateEvents(events) {
 // -----------------------------------------------------
 // 5) CREATE CALENDAR EVENT & EXPORT
 // -----------------------------------------------------
-function createEvent(event) {
+function createEvent(event, holidaySchedules) {
 	// Validate event.start
 	if (!(event.start instanceof Date) || isNaN(event.start)) {
 		console.warn('Invalid or missing event start date:', event);
@@ -271,6 +283,9 @@ function createEvent(event) {
 	const daysArray = event.days.split(',').map(d => d.trim());
 	shiftDatesByWeekday(startDateTime, endDateTime, daysArray[0]);
 
+	// Generate an exclusion list for holidays
+	const exclusions = generateHolidayExclusions(holidaySchedules, startDateTime, untilDateTime);
+
 	// Calculate the last day (UNTIL in RRULE)
 	const untilStr   = formatUntilDate(untilDateTime);
 
@@ -290,7 +305,8 @@ function createEvent(event) {
 			timeZone: 'America/Toronto',
 		},
 		recurrence: [
-			`RRULE:FREQ=WEEKLY;UNTIL=${untilStr};BYDAY=${byDayStr}`
+			`RRULE:FREQ=WEEKLY;UNTIL=${untilStr};BYDAY=${byDayStr}`,
+			...exclusions
 		],
 		colorId
 	};
@@ -449,6 +465,17 @@ function formatUntilDate(date) {
 	return `${y}${m}${d}`; // YYYYMMDD
 }
 
+function formatExdate(date) {
+	const yyyy = date.getFullYear();
+	const mm = String(date.getMonth() + 1).padStart(2, '0');
+	const dd = String(date.getDate()).padStart(2, '0');
+	const hh = String(date.getHours()).padStart(2, '0');
+	const min = String(date.getMinutes()).padStart(2, '0');
+	const ss = String(date.getSeconds()).padStart(2, '0');
+	return `${yyyy}${mm}${dd}T${hh}${min}${ss}`;
+}
+
+
 function toByDay(dayArr) {
 	const dayMap = { Mon: 'MO', Tue: 'TU', Wed: 'WE', Thu: 'TH', Fri: 'FR' };
 	return dayArr.map(d => dayMap[d] || '').filter(Boolean).join(',');
@@ -496,4 +523,63 @@ function addSpinnerStyle() {
         }
     `;
 	document.head.appendChild(style);
+}
+
+function getCurrentTermId() {
+	const activeMenuItem = document.querySelector('a.menu_item.select_term .fa-check[style]');
+	if (activeMenuItem) {
+		const onclickAttr = activeMenuItem.parentElement.getAttribute('onclick');
+		const termIdMatch = onclickAttr.match(/UU\.caseChangeTermIfOkay\((\d+)\)/);
+		return termIdMatch ? termIdMatch[1] : null;
+	}
+	return null;
+}
+
+function generateHolidayExclusions(holidaySchedules, startDate, endDate, timeZone = 'America/Toronto') {
+	const exclusions = [];
+	const scheduleKeys = Object.keys(holidaySchedules);
+
+	// Loop through all the days between startDate and endDate
+	const currentDate = new Date(startDate);
+	while (currentDate <= endDate) {
+		const dayCode = getDayCode(currentDate);
+
+		for (const scheduleKey of scheduleKeys) {
+			if (isHoliday(scheduleKey, dayCode, holidaySchedules)) {
+				exclusions.push(formatExdate(currentDate));
+				break;
+			}
+		}
+
+		// Move to the next day
+		currentDate.setDate(currentDate.getDate() + 1);
+	}
+
+	// Return exclusions formatted for RRULE
+	return exclusions.map(date => `EXDATE;TZID=${timeZone}:${date}`);
+}
+
+function isHoliday(scheduleKey, dayCode, holidaySchedules) {
+	const sched = holidaySchedules[scheduleKey];
+	return sched && sched.holidays && sched.holidays[dayCode] ? true : false;
+}
+
+async function fetchTermBundle(termId) {
+	const response = await fetch(`https://vsb.concordia.ca/api/v2/classextras/termbundle?term=${termId}`);
+	if (!response.ok) {
+		throw new Error('Network response was not ok');
+	}
+	return response.json();
+}
+
+function getDayCode(date) {
+	if (!(date instanceof Date)) {
+		throw new Error("Input must be a Date object.");
+	}
+
+	// Calculate the number of milliseconds since December 31, 2007
+	const referenceDate = new Date(2007, 11, 31);
+	const timeDifference = date.getTime() - referenceDate.getTime();
+
+	return Math.ceil(timeDifference / (1000 * 60 * 60 * 24));
 }
