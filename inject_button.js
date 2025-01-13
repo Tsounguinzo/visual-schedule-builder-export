@@ -54,7 +54,7 @@ function showPopup(holidaySchedules) {
 		popupWindow.innerHTML = `
       <h3 style="text-align:center;border-bottom:2px solid #912338">Ready To Export!</h3>
       <br>
-      <p>Note: This extension currently does not account for breaks, such as reading week or holidays.</p>
+      <p>You can click on Go! to start the export</p>
     `;
 
 		// Build up events from DOM
