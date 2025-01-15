@@ -182,6 +182,7 @@ function buildCourseInfoMap(courseBoxes) {
 }
 
 function matchEventsToCourseInfo(events, courseInfoMap) {
+	const newEvents = []; // Temporary array for new LAB entries
 	for (const event of events) {
 		const courseData = courseInfoMap[event.courseCode];
 		if (!courseData) return; // No info for this code
@@ -228,14 +229,49 @@ function matchEventsToCourseInfo(events, courseInfoMap) {
 		} else {
 			console.warn(`No matching component for: ${event.courseCode} ${event.component}`);
 		}
+		const LABCustomEntry = courseData.courseDayTime.find(e => e.component === 'LAB');
+
+		if (LABCustomEntry) {
+			const location = courseData.componentsPlusLocation.find(e => e.type.startsWith('LAB'))?.location || '';
+
+			const baseLabEvent = {
+				courseName: courseData.courseName,
+				courseCode: event.courseCode,
+				component: 'LAB',
+				time: [LABCustomEntry.startTime, LABCustomEntry.endTime],
+				days: LABCustomEntry.days.join(", "),
+				location: location || ''
+			};
+
+			if (LABCustomEntry.rangeDates) {
+				// Create separate events for each date range
+				LABCustomEntry.rangeDates.forEach(range => {
+					newEvents.push({
+						...baseLabEvent,
+						start:  new Date(`${range.startDate} ${courseData.courseDuration.start.getFullYear()}`),
+						end: new Date(`${range.endDate} ${courseData.courseDuration.end.getFullYear()}`),
+						occurrence: range.occurrence,
+					});
+				});
+			} else {
+				// Create single event with course duration
+				newEvents.push({
+					...baseLabEvent,
+					start:  new Date(`${LABCustomEntry.startDate} ${courseData.courseDuration.start.getFullYear()}`),
+					end: new Date(`${LABCustomEntry.endDate} ${courseData.courseDuration.end.getFullYear()}`),
+					occurrence: LABCustomEntry.occurrence
+				});
+			}
+		}
 	}
+	events.push(...newEvents);
 }
 
 function removeDuplicateEvents(events) {
 	return events.filter(
 		(ev, idx, arr) =>
 			idx === arr.findIndex(
-				(t) => t.courseCode === ev.courseCode && t.component === ev.component
+				(t) => t.courseCode === ev.courseCode && t.component === ev.component && t.start.getTime() === ev.start.getTime() && t.end.getTime() === ev.end.getTime()
 			)
 	);
 }
@@ -247,6 +283,10 @@ function createEvent(event, holidaySchedules) {
 	// Validate event.start
 	if (!(event.start instanceof Date) || isNaN(event.start)) {
 		console.warn('Invalid or missing event start date:', event);
+		return null;
+	}
+	if (!(event.end instanceof Date) || isNaN(event.end)) {
+		console.warn('Invalid or missing event end date:', event.end);
 		return null;
 	}
 
@@ -289,7 +329,11 @@ function createEvent(event, holidaySchedules) {
 	// Calculate the last day (UNTIL in RRULE)
 	const untilStr   = formatUntilDate(untilDateTime);
 
+	// Handle recurrence frequency (weekly, biweekly, etc.)
+	const interval = typeof event.occurrence === 'number' ? event.occurrence : 1;
 	const byDayStr = toByDay(daysArray);
+	const recurrenceRule = `RRULE:FREQ=WEEKLY;INTERVAL=${interval};UNTIL=${untilStr};BYDAY=${byDayStr}`;
+
 	const colorId = getColorIdForCourse(event.courseCode);
 
 	return {
@@ -305,7 +349,7 @@ function createEvent(event, holidaySchedules) {
 			timeZone: 'America/Toronto',
 		},
 		recurrence: [
-			`RRULE:FREQ=WEEKLY;UNTIL=${untilStr};BYDAY=${byDayStr}`,
+			recurrenceRule,
 			...exclusions
 		],
 		colorId
@@ -388,15 +432,127 @@ function parseDayTime(dayTimeNodes) {
 		.filter(node => node.nodeType === Node.TEXT_NODE && node.nodeValue.trim())
 		.map(textNode => textNode.nodeValue.trim())
 		.map(segment => {
-			const match = segment.match(/^([\w,\s]+)\s*:\s*([\d:APM\s]+)\s+to\s+([\d:APM\s]+)$/);
-			if (!match) return null;
+			// Match for regular day and time format
+			const dayTimeMatch = segment.match(/^([\w,\s]+)\s*:\s*([\d:APM\s]+)\s+to\s+([\d:APM\s]+)$/);
 
-			const [ , dayStr, startTime, endTime ] = match;
-			const days = dayStr.split(',').map(d => d.trim());
+			if (dayTimeMatch) {
+				const [, dayStr, startTime, endTime] = dayTimeMatch;
+				const days = dayStr.split(',').map(d => d.trim());
+				return { days, startTime, endTime, raw: segment, occurrence: 1 };
+			}
 
-			return { days, startTime, endTime, raw: segment };
+			// Match for date range and time
+			const dateRangeMatch = segment.match(/^([\w]+)\s+([\w]+\s+\d+)\s+-\s+([\w]+\s+\d+):\s*([\d:APM\s]+)\s+to\s+([\d:APM\s]+)$/);
+
+			if (dateRangeMatch) {
+				const [, dayStr, startDateStr, endDateStr, startTime, endTime] = dateRangeMatch;
+				const days = dayStr.split(',').map(d => d.trim());
+				const startDate = new Date(`${startDateStr} 2023`);
+				const endDate = new Date(`${endDateStr} 2023`);
+				return {
+					days,
+					startTime,
+					endTime,
+					raw: segment,
+					rangeDates: [{
+						startDate,
+						endDate,
+						occurrence: 'custom'
+					}]
+				};
+			}
+
+			return null;
 		})
-		.filter(Boolean);
+		.filter(Boolean)
+		.reduce((acc, entry) => {
+			if (entry.rangeDates) {
+				// Check for an existing entry to potentially merge
+				const existingEntry = acc.find(e =>
+					e.rangeDates &&
+					e.days.join(',') === entry.days.join(',') &&
+					e.startTime === entry.startTime &&
+					e.endTime === entry.endTime
+				);
+
+				if (existingEntry) {
+					// Check for gaps between date ranges
+					const lastRange = existingEntry.rangeDates[existingEntry.rangeDates.length - 1];
+					const newRange = entry.rangeDates[0];
+					const daysBetween = (newRange.startDate - lastRange.endDate) / (1000 * 60 * 60 * 24);
+
+					if (daysBetween <= 1) {
+						// Merge the ranges if there's no significant gap
+						lastRange.endDate = newRange.endDate;
+					} else {
+						// Add as a new range if there's a gap
+						existingEntry.rangeDates.push({
+							startDate: newRange.startDate,
+							endDate: newRange.endDate,
+							occurrence: calculateOccurrence(entry.raw)
+						});
+					}
+					existingEntry.raw += `; ${entry.raw}`;
+				} else {
+					// Add new entry with calculated occurrence
+					entry.rangeDates[0].occurrence = calculateOccurrence(entry.raw);
+					acc.push(entry);
+				}
+			} else {
+				acc.push(entry);
+			}
+
+			return acc;
+		}, [])
+		.map(entry => {
+			if (entry.rangeDates) {
+				const options = { month: 'short', day: 'numeric' };
+				return {
+					days: entry.days,
+					rangeDates: entry.rangeDates.map(range => ({
+						startDate: range.startDate.toLocaleDateString('en-US', options),
+						endDate: range.endDate.toLocaleDateString('en-US', options),
+						occurrence: range.occurrence
+					})),
+					startTime: entry.startTime,
+					endTime: entry.endTime,
+					raw: entry.raw,
+					component: 'LAB' // Let's assume it's a lab until a user complains
+				};
+			}
+			return entry;
+		});
+}
+
+function calculateOccurrence(raw) {
+	// Split the raw string into individual date range segments
+	const segments = raw.split(';').map(s => s.trim());
+
+	// Extract dates from each segment
+	const dateRanges = segments.map(segment => {
+		const match = segment.match(/(\w+)\s+(\w+\s+\d+)\s+-\s+(\w+\s+\d+):/);
+		if (!match) return null;
+
+		const [, dayOfWeek, startDateStr, endDateStr] = match;
+		return new Date(`${startDateStr} 2023`);
+	}).filter(Boolean);
+
+	if (dateRanges.length < 2) {
+		return 1; // Default to weekly if we can't determine pattern
+	}
+
+	// Calculate intervals between consecutive start dates
+	const intervals = [];
+	for (let i = 1; i < dateRanges.length; i++) {
+		const diffInDays = (dateRanges[i] - dateRanges[i-1]) / (1000 * 60 * 60 * 24);
+		intervals.push(diffInDays);
+	}
+
+	// Calculate the average interval
+	const averageInterval = intervals.reduce((sum, interval) => sum + interval, 0) / intervals.length;
+
+	// Convert days to weeks (rounding to nearest whole number)
+	return Math.round(averageInterval / 7);
 }
 
 function extractContent(component) {
@@ -446,9 +602,16 @@ function convertTo24Hour(timeStr) {
 }
 
 function shiftDatesByWeekday(start, end, firstDay) {
+	const startDay = start.getDay();
+
 	const dayToOffset = {
-		'Mon': 0, 'Tue': 1, 'Wed': 2, 'Thu': 3, 'Fri': 4
-	};
+		Mon: 1 - startDay,
+		Tue: 2 - startDay,
+		Wed: 3 - startDay,
+		Thu: 4 - startDay,
+		Fri: 5 - startDay
+	}
+
 	const offset = dayToOffset[firstDay] || 0;
 	start.setDate(start.getDate() + offset);
 	end.setDate(end.getDate() + offset);
