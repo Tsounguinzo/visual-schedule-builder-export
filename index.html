@@ -54,13 +54,13 @@
         <div class="flex justify-between h-16">
             <div class="flex">
                 <div class="flex-shrink-0 flex items-center">
-                    <span class="text-2xl font-bold text-primary">VSB Export</span>
+                    <button onclick="showPage('home')" class="text-2xl font-bold text-primary">VSB Export</button>
                 </div>
             </div>
             <div class="flex items-center space-x-4">
                 <button onclick="showPage('home')" class="text-gray-700 hover:text-primary px-3 py-2">Home</button>
-                <button onclick="showPage('privacy')" class="text-gray-700 hover:text-primary px-3 py-2">Privacy Policy</button>
-                <button onclick="showPage('terms')" class="text-gray-700 hover:text-primary px-3 py-2">Terms of Service</button>
+                <a href="#privacy" class="text-gray-700 hover:text-primary px-3 py-2">Privacy Policy</a>
+                <a href="#terms" class="text-gray-700 hover:text-primary px-3 py-2">Terms of Service</a>
                 <a href="https://chromewebstore.google.com/detail/visual-schedule-builder-e/nbapggbchldhdjckbhdhkhlodokjdoha?authuser=0&hl=en" target="_blank" class="btn-primary">Add to Chrome</a>
             </div>
         </div>
@@ -159,8 +159,8 @@
                         <h3 class="text-lg font-bold mb-4">Links</h3>
                         <ul class="space-y-2">
                             <li><a href="https://github.com/Tsounguinzo/visual-schedule-builder-export" class="text-gray-400 hover:text-white">GitHub</a></li>
-                            <li><a href="#" onclick="showPage('privacy')" class="text-gray-400 hover:text-white">Privacy Policy</a></li>
-                            <li><a href="#" onclick="showPage('terms')" class="text-gray-400 hover:text-white">Terms of Service</a></li>
+                            <li><a href="#privacy" class="text-gray-400 hover:text-white">Privacy Policy</a></li>
+                            <li><a href="#terms" class="text-gray-400 hover:text-white">Terms of Service</a></li>
                         </ul>
                     </div>
                     <div>
@@ -226,10 +226,6 @@
 </div>
 
 <script>
-    // Show the home page by default
-    document.getElementById('pages').style.display = 'block';
-    document.getElementById('home').classList.remove('hidden');
-
     function showPage(pageId) {
         // Hide all pages
         document.querySelectorAll('.page').forEach(page => {
@@ -242,6 +238,45 @@
         // Scroll to top
         window.scrollTo(0, 0);
     }
+
+    // Function to handle hash changes
+    function handleHash() {
+        // Get the hash without the # symbol
+        const hash = window.location.hash.slice(1);
+
+        // Show appropriate page based on hash
+        if (hash === 'privacy') {
+            showPage('privacy');
+        } else if (hash === 'terms') {
+            showPage('terms');
+        } else {
+            showPage('home');
+        }
+    }
+
+    // Show initial page based on hash
+    document.getElementById('pages').style.display = 'block';
+    handleHash();
+
+    // Listen for hash changes
+    window.addEventListener('hashchange', handleHash);
+
+    // Update navigation buttons to use hash
+    document.querySelectorAll('button[onclick^="showPage"]').forEach(button => {
+        button.onclick = () => {
+            const page = button.onclick.toString().match(/'(.+?)'/)[1];
+            window.location.hash = page === 'home' ? '' : page;
+        };
+    });
+
+    // Update footer links to use hash
+    document.querySelectorAll('a[onclick^="showPage"]').forEach(link => {
+        link.onclick = (e) => {
+            e.preventDefault();
+            const page = link.onclick.toString().match(/'(.+?)'/)[1];
+            window.location.hash = page;
+        };
+    });
 </script>
 </body>
 </html>
