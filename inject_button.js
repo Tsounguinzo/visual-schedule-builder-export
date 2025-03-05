@@ -27,26 +27,33 @@ stylePopupElement(popupWindow); // helper to add your styles
 
 async function togglePopup() {
 	if (!isPopupOpen) {
-		let holidaySchedules = {};
-		try {
-			const currentTermId = getCurrentTermId();
-			if (!currentTermId) {
-				throw new Error('No term ID found.');
-			}
-			const termBundleData = await fetchTermBundle(currentTermId);
-			holidaySchedules = termBundleData.holidayschedules || {};
-		} catch (error) {
-			console.error('Error fetching term bundle:', error);
-			// Continue without holiday data if fetch fails.
-		}
-		showPopup(holidaySchedules);
+		await showPopup();
 	} else {
 		hidePopup();
 	}
 }
 
-function showPopup(holidaySchedules) {
+async function getHolidaySchedules() {
+	let holidaySchedules = {};
+	try {
+		const currentTermId = getCurrentTermId();
+		//console.log('Debug: Current term ID -', currentTermId);
+		if (!currentTermId) {
+			throw new Error('No term ID found.');
+		}
+		const termBundleData = await fetchTermBundle(currentTermId);
+		holidaySchedules = termBundleData.holidayschedules || {};
+	} catch (error) {
+		console.error('Error fetching term bundle:', error);
+		return {};
+	}
+	return holidaySchedules;
+}
+
+async function showPopup() {
 	isPopupOpen = true;
+	let holidaySchedules = await getHolidaySchedules();
+	//console.log('Debug: Holiday schedules -', holidaySchedules);
 	positionPopupBelowButton(exportBtn, popupWindow); // Position popup relative to the button
 	popupWindow.style.display = 'block';
 
@@ -359,7 +366,7 @@ function createEvent(event, holidaySchedules) {
 function exportToGoogleCalendar(eventArray) {
 
 	if (!eventArray || !Array.isArray(eventArray) || eventArray.length === 0) {
-		popupWindow.innerHTML = 'No events to export.';
+		popupWindow.innerHTML = 'No schedule to export.';
 		return;
 	}
 
@@ -372,10 +379,11 @@ function exportToGoogleCalendar(eventArray) {
 	}).filter(event => event !== null);
 
 	if (eventsToExport.length === 0) {
-		popupWindow.innerHTML = 'No valid events to export.';
+		popupWindow.innerHTML = 'No valid schedule to export.';
 		return;
 	}
 
+	//console.log('Debug: eventsToExport - ', eventsToExport)
 	chrome.runtime.sendMessage(eventsToExport, function(response) {
 		if (response && response.success) {
 			popupWindow.innerHTML = `Successfully exported ${response.created} of ${response.total} events.`;
@@ -702,12 +710,26 @@ function addSpinnerStyle() {
 }
 
 function getCurrentTermId() {
-	const activeMenuItem = document.querySelector('a.menu_item.select_term .fa-check[style]');
-	if (activeMenuItem) {
-		const onclickAttr = activeMenuItem.parentElement.getAttribute('onclick');
-		const termIdMatch = onclickAttr.match(/UU\.caseChangeTermIfOkay\((\d+)\)/);
-		return termIdMatch ? termIdMatch[1] : null;
+	// First, extract the term text from the header label
+	const headerTermLabel = document.querySelector('.autho_text.header_invader_text_top.active-term-label');
+	if (!headerTermLabel) return null;
+
+	const termText = headerTermLabel.textContent.trim();
+
+	// Find the matching menu item in the main menu
+	const menuItems = document.querySelectorAll('.main_menu .menu_item.select_term');
+
+	for (const menuItem of menuItems) {
+		// Check if the menu item text matches the header term label
+		if (menuItem.textContent.trim() === termText) {
+			// Extract the term ID from the onclick attribute
+			const onclickAttr = menuItem.getAttribute('onclick');
+			const termIdMatch = onclickAttr.match(/UU\.caseChangeTermIfOkay\((\d+)\)/);
+
+			return termIdMatch ? termIdMatch[1] : null;
+		}
 	}
+
 	return null;
 }
 
@@ -718,7 +740,7 @@ function generateHolidayExclusions(holidaySchedules, startDate, endDate, timeZon
 	// Loop through all the days between startDate and endDate
 	const currentDate = new Date(startDate);
 	while (currentDate <= endDate) {
-		const dayCode = getDayCode(currentDate);
+		const dayCode = getDayCode(currentDate, timeZone);
 
 		for (const scheduleKey of scheduleKeys) {
 			if (isHoliday(scheduleKey, dayCode, holidaySchedules)) {
@@ -748,14 +770,34 @@ async function fetchTermBundle(termId) {
 	return response.json();
 }
 
-function getDayCode(date) {
+function getDayCode(date, timeZone) {
 	if (!(date instanceof Date)) {
 		throw new Error("Input must be a Date object.");
 	}
 
 	// Calculate the number of milliseconds since December 31, 2007
 	const referenceDate = new Date(2007, 11, 31);
-	const timeDifference = date.getTime() - referenceDate.getTime();
+	const timeDifference = normalizeToTimeZone(date, timeZone).getTime() - normalizeToTimeZone(referenceDate, timeZone).getTime();
 
 	return Math.ceil(timeDifference / (1000 * 60 * 60 * 24));
+}
+
+function normalizeToTimeZone(d, tz) {
+	const options = { timeZone: tz, year: 'numeric', month: 'numeric', day: 'numeric' };
+	// Format the date into its parts for the specified time zone
+	const formatter = new Intl.DateTimeFormat('en-US', options);
+	const parts = formatter.formatToParts(d);
+	let year, month, day;
+	for (const part of parts) {
+		if (part.type === 'year') {
+			year = part.value;
+		} else if (part.type === 'month') {
+			month = part.value;
+		} else if (part.type === 'day') {
+			day = part.value;
+		}
+	}
+	// Create a new Date at local midnight corresponding to the date in that time zone.
+	// Note: This new Date is constructed in local time but its components match the target time zone.
+	return new Date(year, month - 1, day);
 }
